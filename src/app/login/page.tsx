@@ -9,6 +9,17 @@ export default function LoginPage() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [isRegister, setIsRegister] = useState(false)
+  const [regMsg, setRegMsg] = useState('')
+
+  async function handleRegister(e: React.FormEvent) {
+    e.preventDefault()
+    setLoading(true); setRegMsg(''); setError('')
+    const { error: err } = await supabase.auth.signUp({ email: `${loginId}@rakusoo.app`, password })
+    if (err) setError(err.message)
+    else setRegMsg('登録完了。ログインしてください。')
+    setLoading(false)
+  }
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault()
@@ -53,6 +64,18 @@ export default function LoginPage() {
             {loading ? 'ログイン中...' : 'ログイン'}
           </button>
         </form>
+        {regMsg && <div className="text-green-600 text-sm mt-3 text-center">{regMsg}</div>}
+        <div className="mt-4 text-center">
+          <button onClick={() => setIsRegister(!isRegister)} className="text-blue-600 text-sm hover:underline">
+            {isRegister ? 'ログインに戻る' : '新規登録はこちら'}
+          </button>
+          {isRegister && (
+            <button onClick={handleRegister} disabled={loading || !loginId || !password}
+              className="w-full mt-3 bg-green-600 text-white py-2 rounded hover:bg-green-700 disabled:opacity-50 text-sm font-medium">
+              新規登録
+            </button>
+          )}
+        </div>
       </div>
     </div>
   )

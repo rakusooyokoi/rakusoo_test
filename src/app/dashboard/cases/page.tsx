@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect } from 'react'
+import React, { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 
 const days = ['mon','tue','wed','thu','fri','sat','sun'] as const
@@ -15,7 +15,7 @@ function fmtDate(d:Date) { return `${d.getFullYear()}-${String(d.getMonth()+1).p
 function fmtNum(n:any) { return n ? Number(n).toLocaleString() : '-' }
 
 const emptyForm = () => ({
-  case_name:'', shipper_id:'', case_type:'regular', unit_price:'', default_quantity:1, default_highway_price:'',
+  case_name:'', shipper_id:'', employee_id:'', case_type:'regular', unit_price:'', default_quantity:1, default_highway_price:'',
   vehicle_type:'', memo:'', is_active:true, start_date:'', end_date:'', operation_date:'', management_number:''
 })
 
@@ -28,6 +28,7 @@ export default function CasesPage() {
   const [items, setItems] = useState<any[]>([])
   const [shippers, setShippers] = useState<any[]>([])
   const [vendors, setVendors] = useState<any[]>([])
+  const [employees, setEmployees] = useState<any[]>([])
   const [showModal, setShowModal] = useState(false)
   const [editing, setEditing] = useState<string|null>(null)
   const [form, setForm] = useState(emptyForm())
@@ -38,10 +39,10 @@ export default function CasesPage() {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   const [expandedVendors, setExpandedVendors] = useState<Record<string,any[]>>({})
 
-  useEffect(() => { Promise.all([load(), loadShippers(), loadVendors()]) }, [])
+  useEffect(() => { Promise.all([load(), loadShippers(), loadVendors(), loadEmployees()]) }, [])
 
   async function load() {
-    const { data } = await supabase.from('cases').select('*, shippers(name, code)').order('created_at', { ascending: false })
+    const { data } = await supabase.from('cases').select('*, shippers(name, code), employees(name)').order('created_at', { ascending: false })
     setItems(data || [])
   }
   async function loadShippers() {
@@ -51,6 +52,10 @@ export default function CasesPage() {
   async function loadVendors() {
     const { data } = await supabase.from('vendors').select('id, code, name').eq('is_active', true).order('code')
     setVendors(data || [])
+  }
+  async function loadEmployees() {
+    const { data } = await supabase.from('employees').select('id, code, name').eq('is_active', true).order('code')
+    setEmployees(data || [])
   }
 
   const filteredShippers = shippers.filter(s => {
@@ -123,8 +128,9 @@ export default function CasesPage() {
     let caseId = editing
     const isNew = !editing
     const payload: any = { ...form }
-    delete payload.shippers; delete payload.id; delete payload.tenant_id; delete payload.created_at
+    delete payload.shippers; delete payload.employees; delete payload.id; delete payload.tenant_id; delete payload.created_at
     if (!payload.shipper_id) delete payload.shipper_id
+    if (!payload.employee_id) payload.employee_id = null
     if (!payload.start_date) payload.start_date = null
     if (!payload.end_date) payload.end_date = null
     if (!payload.operation_date) payload.operation_date = null
@@ -136,14 +142,35 @@ export default function CasesPage() {
       caseId = data?.id
     }
     if (caseId) {
-      await supabase.from('case_vendors').delete().eq('case_id', caseId)
-      const vendorRows = caseVendors.filter(v => v.carrier_type === 'self' || v.vendor_id).map(v => ({
-        case_id: caseId, carrier_type: v.carrier_type || 'self',
-        vendor_id: v.carrier_type === 'self' ? null : v.vendor_id || null,
-        vendor_price: v.vendor_price || 0, default_highway_price: v.default_highway_price || 0,
-        memo: v.memo || '', mon: v.mon, tue: v.tue, wed: v.wed, thu: v.thu, fri: v.fri, sat: v.sat, sun: v.sun
-      }))
-      if (vendorRows.length > 0) await supabase.from('case_vendors').insert(vendorRows)
+      // 既存のcase_vendor IDを保持（CASCADE削除で売上子行が消えるのを防ぐ）
+      const existingIds = caseVendors.filter(v => v.id).map(v => v.id)
+      const currentIds: string[] = []
+
+      for (const v of caseVendors.filter(v => v.carrier_type === 'self' || v.vendor_id)) {
+        const row = {
+          case_id: caseId, carrier_type: v.carrier_type || 'self',
+          vendor_id: v.carrier_type === 'self' ? null : v.vendor_id || null,
+          vendor_price: v.vendor_price || 0, default_highway_price: v.default_highway_price || 0,
+          memo: v.memo || '', mon: v.mon, tue: v.tue, wed: v.wed, thu: v.thu, fri: v.fri, sat: v.sat, sun: v.sun
+        }
+        if (v.id) {
+          // 既存 → UPDATE
+          await supabase.from('case_vendors').update(row).eq('id', v.id)
+          currentIds.push(v.id)
+        } else {
+          // 新規 → INSERT
+          const { data: ins } = await supabase.from('case_vendors').insert(row).select('id').single()
+          if (ins) currentIds.push(ins.id)
+        }
+      }
+
+      // 削除された行のみ削除（この行に紐づく売上子行もCASCADEで消える）
+      for (const eid of existingIds) {
+        if (!currentIds.includes(eid)) {
+          await supabase.from('case_vendors').delete().eq('id', eid)
+        }
+      }
+
       if (isNew) await generateSalesBase(caseId, form)
     }
     setShowModal(false); await load(); setSaving(false)
@@ -180,84 +207,96 @@ export default function CasesPage() {
       </div>
 
       <div className="bg-white rounded-lg shadow overflow-hidden">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm" style={{tableLayout:'fixed'}}>
+          <colgroup>
+            <col style={{width:'120px'}} />
+            <col style={{width:'160px'}} />
+            <col style={{width:'60px'}} />
+            <col style={{width:'140px'}} />
+            <col style={{width:'90px'}} />
+            <col style={{width:'90px'}} />
+            <col style={{width:'90px'}} />
+            <col style={{width:'90px'}} />
+            <col style={{width:'60px'}} />
+            <col style={{width:'100px'}} />
+          </colgroup>
           <thead className="bg-gray-50 border-b">
             <tr>
               <th className="px-4 py-3 text-left text-gray-600">管理番号</th>
               <th className="px-4 py-3 text-left text-gray-600">案件名</th>
               <th className="px-4 py-3 text-left text-gray-600">便種</th>
               <th className="px-4 py-3 text-left text-gray-600">荷主</th>
+              <th className="px-4 py-3 text-left text-gray-600">担当者</th>
               <th className="px-4 py-3 text-right text-gray-600">請求単価</th>
+              <th className="px-4 py-3 text-left text-gray-600">開始日</th>
+              <th className="px-4 py-3 text-left text-gray-600">終了日</th>
               <th className="px-4 py-3 text-left text-gray-600">状態</th>
               <th className="px-4 py-3 text-center text-gray-600">操作</th>
             </tr>
           </thead>
           <tbody>
             {items.map(item => (
-              <tr key={item.id}>
-                <td colSpan={7} className="p-0">
-                  <table className="w-full">
-                    <tbody>
-                      <tr className="border-b hover:bg-gray-50">
-                        <td className="px-4 py-2 text-xs font-mono text-gray-500 w-36">{item.management_number}</td>
-                        <td className="px-4 py-2">
-                          <button onClick={() => toggleExpand(item)} className="text-gray-400 hover:text-gray-700 mr-1 text-xs w-4 inline-block">
-                            {expandedIds.has(item.id) ? '▼' : '▶'}
-                          </button>
-                          {item.case_name}
-                        </td>
-                        <td className="px-4 py-2">
-                          <span className={item.case_type==='spot'?'text-orange-600':'text-blue-600'} style={{fontSize:'0.75rem'}}>
-                            {item.case_type==='spot'?'スポット':'定期'}
-                          </span>
-                        </td>
-                        <td className="px-4 py-2">{item.shippers?.name||'-'}</td>
-                        <td className="px-4 py-2 text-right">{fmtNum(item.unit_price)}</td>
-                        <td className="px-4 py-2">
-                          <span className={item.is_active?'text-green-600':'text-red-500'}>{item.is_active?'稼働中':'終了'}</span>
-                        </td>
-                        <td className="px-4 py-2 text-center space-x-2">
-                          <button onClick={() => openEdit(item)} className="text-blue-600 hover:underline">編集</button>
-                          <button onClick={() => remove(item.id)} className="text-red-500 hover:underline">削除</button>
-                        </td>
-                      </tr>
-                      {expandedIds.has(item.id) && (
-                        <tr className="bg-gray-50">
-                          <td colSpan={7} className="px-8 py-3">
-                            {(!expandedVendors[item.id] || expandedVendors[item.id].length === 0) ?
-                              <div className="text-xs text-gray-400">実運送事業者なし</div> :
-                              <table className="w-full text-xs">
-                                <thead><tr className="text-gray-500">
-                                  <th className="text-left py-1 pr-4">区分</th>
-                                  <th className="text-left py-1 pr-4">事業者名</th>
-                                  <th className="text-right py-1 pr-4">支払単価</th>
-                                  <th className="text-left py-1">曜日</th>
-                                </tr></thead>
-                                <tbody>
-                                  {expandedVendors[item.id].map((cv: any) => (
-                                    <tr key={cv.id} className="border-t border-gray-200">
-                                      <td className="py-1 pr-4">
-                                        <span className={cv.carrier_type==='self'?'text-blue-600':'text-orange-600'}>
-                                          {cv.carrier_type==='self'?'自社':'協力会社'}
-                                        </span>
-                                      </td>
-                                      <td className="py-1 pr-4">{cv.carrier_type==='self'?'自社':`${cv.vendors?.code} ${cv.vendors?.name}`}</td>
-                                      <td className="py-1 pr-4 text-right">{cv.carrier_type==='partner'?fmtNum(cv.vendor_price):'-'}</td>
-                                      <td className="py-1">{getDaysText(cv)||'-'}</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            }
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </td>
-              </tr>
+              <React.Fragment key={item.id}>
+                <tr className="border-b hover:bg-gray-50">
+                  <td className="px-4 py-2 text-xs font-mono text-gray-500 truncate">{item.management_number}</td>
+                  <td className="px-4 py-2 truncate">
+                    <button onClick={() => toggleExpand(item)} className="text-gray-400 hover:text-gray-700 mr-1 text-xs w-4 inline-block">
+                      {expandedIds.has(item.id) ? '▼' : '▶'}
+                    </button>
+                    {item.case_name}
+                  </td>
+                  <td className="px-4 py-2">
+                    <span className={item.case_type==='spot'?'text-orange-600':'text-blue-600'} style={{fontSize:'0.75rem'}}>
+                      {item.case_type==='spot'?'スポット':'定期'}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2 truncate">{item.shippers?.name||'-'}</td>
+                  <td className="px-4 py-2 truncate">{item.employees?.name||'-'}</td>
+                  <td className="px-4 py-2 text-right">{fmtNum(item.unit_price)}</td>
+                  <td className="px-4 py-2 text-xs text-gray-500">{item.case_type==='spot' ? (item.operation_date||'-') : (item.start_date||'-')}</td>
+                  <td className="px-4 py-2 text-xs text-gray-500">{item.case_type==='spot' ? '-' : (item.end_date||'-')}</td>
+                  <td className="px-4 py-2">
+                    <span className={item.is_active?'text-green-600':'text-red-500'}>{item.is_active?'稼働中':'終了'}</span>
+                  </td>
+                  <td className="px-4 py-2 text-center space-x-2">
+                    <button onClick={() => openEdit(item)} className="text-blue-600 hover:underline">編集</button>
+                    <button onClick={() => remove(item.id)} className="text-red-500 hover:underline">削除</button>
+                  </td>
+                </tr>
+                {expandedIds.has(item.id) && (
+                  <tr className="bg-gray-50">
+                    <td colSpan={10} className="px-8 py-3">
+                      {(!expandedVendors[item.id] || expandedVendors[item.id].length === 0) ?
+                        <div className="text-xs text-gray-400">実運送事業者なし</div> :
+                        <table className="w-full text-xs">
+                          <thead><tr className="text-gray-500">
+                            <th className="text-left py-1 pr-4">区分</th>
+                            <th className="text-left py-1 pr-4">事業者名</th>
+                            <th className="text-right py-1 pr-4">支払単価</th>
+                            <th className="text-left py-1">曜日</th>
+                          </tr></thead>
+                          <tbody>
+                            {expandedVendors[item.id].map((cv: any) => (
+                              <tr key={cv.id} className="border-t border-gray-200">
+                                <td className="py-1 pr-4">
+                                  <span className={cv.carrier_type==='self'?'text-blue-600':'text-orange-600'}>
+                                    {cv.carrier_type==='self'?'自社':'協力会社'}
+                                  </span>
+                                </td>
+                                <td className="py-1 pr-4">{cv.carrier_type==='self'?'自社':`${cv.vendors?.code} ${cv.vendors?.name}`}</td>
+                                <td className="py-1 pr-4 text-right">{cv.carrier_type==='partner'?fmtNum(cv.vendor_price):'-'}</td>
+                                <td className="py-1">{getDaysText(cv)||'-'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      }
+                    </td>
+                  </tr>
+                )}
+              </React.Fragment>
             ))}
-            {items.length===0 && <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-400">データがありません</td></tr>}
+            {items.length===0 && <tr><td colSpan={10} className="px-4 py-8 text-center text-gray-400">データがありません</td></tr>}
           </tbody>
         </table>
       </div>
@@ -296,6 +335,13 @@ export default function CasesPage() {
                     ))}
                   </div>
                 )}
+              </div>
+              <div>
+                <label className="block text-xs text-gray-600 mb-1">担当者</label>
+                <select value={form.employee_id} onChange={e=>upd('employee_id',e.target.value)} className="w-full border rounded px-2 py-1.5 text-sm">
+                  <option value="">選択してください</option>
+                  {employees.map(emp => <option key={emp.id} value={emp.id}>{emp.code} {emp.name}</option>)}
+                </select>
               </div>
               {form.case_type==='regular' ? (
                 <div className="grid grid-cols-2 gap-3">

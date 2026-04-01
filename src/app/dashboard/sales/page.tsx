@@ -28,6 +28,8 @@ export default function SalesPage() {
   const [loading, setLoading] = useState(false)
   const [showShipper, setShowShipper] = useState(false)
   const [expandedCases, setExpandedCases] = useState<Set<string>>(new Set())
+  const [employees, setEmployees] = useState<any[]>([])
+  const [filterEmployee, setFilterEmployee] = useState('')
 
   // Highway panel state
   const [hwPanel, setHwPanel] = useState<{ show: boolean; caseItem: any; days: any[] }>({ show: false, caseItem: null, days: [] })
@@ -63,11 +65,13 @@ export default function SalesPage() {
     const startDate = `${ym}-01`
     const endDate = `${ym}-${dim}`
 
-    const [casesRes, vendorsRes, salesRes] = await Promise.all([
-      supabase.from('cases').select('*, shippers(name, code)').eq('is_active', true).order('created_at'),
+    const [casesRes, vendorsRes, salesRes, empRes] = await Promise.all([
+      supabase.from('cases').select('*, shippers(name, code), employees(name)').eq('is_active', true).order('created_at'),
       supabase.from('case_vendors').select('*, vendors(code, name, short_name)').order('created_at'),
-      supabase.from('sales').select('*').gte('sale_date', startDate).lte('sale_date', endDate)
+      supabase.from('sales').select('*').gte('sale_date', startDate).lte('sale_date', endDate),
+      supabase.from('employees').select('id, name').eq('is_active', true).order('code'),
     ])
+    setEmployees(empRes.data || [])
 
     const casesData = casesRes.data || []
     setCases(casesData)
@@ -275,13 +279,16 @@ export default function SalesPage() {
     })
   }
 
+  // ---- Filter by employee ----
+  const filteredCases = filterEmployee ? cases.filter(c => c.employee_id === filterEmployee) : cases
+
   // ---- Grand totals ----
-  const grandBilling = cases.reduce((s, c) => s + getRowBilling(c), 0)
-  const grandHighway = cases.reduce((s, c) => s + getRowHighway(c.id), 0)
-  const grandPaymentBase = cases.reduce((s, c) => {
+  const grandBilling = filteredCases.reduce((s, c) => s + getRowBilling(c), 0)
+  const grandHighway = filteredCases.reduce((s, c) => s + getRowHighway(c.id), 0)
+  const grandPaymentBase = filteredCases.reduce((s, c) => {
     return s + (caseVendorsMap[c.id] || []).reduce((ss: number, cv: any) => ss + getVendorRowPayment(cv), 0)
   }, 0)
-  const grandPaymentHw = cases.reduce((s, c) => {
+  const grandPaymentHw = filteredCases.reduce((s, c) => {
     return s + (caseVendorsMap[c.id] || []).reduce((ss: number, cv: any) => {
       return ss + (cv.carrier_type === 'partner' ? getVendorRowHighway(cv.id) : 0)
     }, 0)
@@ -460,6 +467,10 @@ export default function SalesPage() {
             <label className="flex items-center gap-1 text-xs text-gray-500 ml-4 cursor-pointer select-none">
               <input type="checkbox" checked={showShipper} onChange={e => setShowShipper(e.target.checked)} className="rounded" /> 荷主表示
             </label>
+            <select value={filterEmployee} onChange={e => setFilterEmployee(e.target.value)} className="ml-4 border rounded px-2 py-1 text-xs">
+              <option value="">全担当者</option>
+              {employees.map(emp => <option key={emp.id} value={emp.id}>{emp.name}</option>)}
+            </select>
           </div>
           <div className="flex items-center gap-6 text-xs">
             <span>売上: <strong className="text-sm text-blue-700">{formatNum(grandBilling)}</strong></span>
@@ -504,7 +515,7 @@ export default function SalesPage() {
                 </tr>
               </thead>
               <tbody>
-                {cases.map(c => {
+                {filteredCases.map(c => {
                   const vendors = caseVendorsMap[c.id] || []
                   const isExpanded = expandedCases.has(c.id)
                   return (
@@ -581,7 +592,7 @@ export default function SalesPage() {
                     </React.Fragment>
                   )
                 })}
-                {cases.length === 0 && (
+                {filteredCases.length === 0 && (
                   <tr>
                     <td colSpan={totalCols} className="text-center text-gray-400 py-8">案件がありません</td>
                   </tr>

@@ -14,9 +14,9 @@ export default function AnnualPLPage() {
   const [fiscalYear, setFiscalYear] = useState(now.getFullYear())
   const [startMonth, setStartMonth] = useState(4) // 4月始まり
   const [loading, setLoading] = useState(false)
-  const [monthlyData, setMonthlyData] = useState<Record<string, MonthData>>({})
-  const [cases, setCases] = useState<any[]>([])
-  const [caseVendors, setCaseVendors] = useState<any[]>([])
+  const [rawData, setRawData] = useState<any[]>([])
+  const [employees, setEmployees] = useState<any[]>([])
+  const [filterEmployee, setFilterEmployee] = useState('')
 
   const months = useMemo(() => {
     const result = []
@@ -37,51 +37,34 @@ export default function AnnualPLPage() {
     const lastDim = new Date(lastMonth.year, lastMonth.month, 0).getDate()
     const endDate = `${lastMonth.year}-${String(lastMonth.month).padStart(2, '0')}-${lastDim}`
 
-    const [casesRes, cvRes, salesRes] = await Promise.all([
-      supabase.from('cases').select('id, unit_price, shipper_id'),
-      supabase.from('case_vendors').select('id, case_id, carrier_type, vendor_price'),
-      supabase.from('sales').select('case_id, case_vendor_id, sale_date, quantity, highway_price')
-        .gte('sale_date', startDate).lte('sale_date', endDate),
+    const [{ data: empData }, { data: plData }] = await Promise.all([
+      supabase.from('employees').select('id, name').eq('is_active', true).order('code'),
+      supabase.rpc('get_annual_pl_by_employee', { p_start: startDate, p_end: endDate }),
     ])
+    setEmployees(empData || [])
+    setRawData(plData || [])
+    setLoading(false)
+  }, [months])
 
-    const casesData = casesRes.data || []
-    setCases(casesData)
-    const caseMap: Record<string, any> = {}
-    for (const c of casesData) caseMap[c.id] = c
-
-    const cvData = cvRes.data || []
-    setCaseVendors(cvData)
-    const cvMap: Record<string, any> = {}
-    for (const cv of cvData) cvMap[cv.id] = cv
-
+  // クライアント側でフィルタ（即座に切替）
+  const monthlyData = useMemo(() => {
     const data: Record<string, MonthData> = {}
     for (const mo of months) {
       data[`${mo.year}-${mo.month}`] = { billing: 0, billingHw: 0, payment: 0, paymentHw: 0 }
     }
-
-    for (const s of (salesRes.data || [])) {
-      const [sy, sm] = s.sale_date.split('-').map(Number)
+    for (const row of rawData) {
+      if (filterEmployee && row.employee_id !== filterEmployee) continue
+      const [sy, sm] = row.month.split('-').map(Number)
       const key = `${sy}-${sm}`
-      if (!data[key]) continue
-
-      if (s.case_vendor_id) {
-        const cv = cvMap[s.case_vendor_id]
-        if (cv) {
-          data[key].payment += (Number(s.quantity) || 0) * (cv.vendor_price || 0)
-          if (cv.carrier_type === 'partner') data[key].paymentHw += Number(s.highway_price) || 0
-        }
-      } else {
-        const c = caseMap[s.case_id]
-        if (c) {
-          data[key].billing += (Number(s.quantity) || 0) * (c.unit_price || 0)
-          data[key].billingHw += Number(s.highway_price) || 0
-        }
+      if (data[key]) {
+        data[key].billing += Number(row.billing) || 0
+        data[key].billingHw += Number(row.billing_hw) || 0
+        data[key].payment += Number(row.payment) || 0
+        data[key].paymentHw += Number(row.payment_hw) || 0
       }
     }
-
-    setMonthlyData(data)
-    setLoading(false)
-  }, [months])
+    return data
+  }, [rawData, filterEmployee, months])
 
   useEffect(() => { loadAll() }, [loadAll])
 
@@ -135,6 +118,10 @@ export default function AnnualPLPage() {
             {[1,2,3,4,5,6,7,8,9,10,11,12].map(m => <option key={m} value={m}>{m}月</option>)}
           </select>
         </div>
+        <select value={filterEmployee} onChange={e => setFilterEmployee(e.target.value)} className="ml-4 border rounded px-2 py-1 text-sm">
+          <option value="">全担当者（合算）</option>
+          {employees.map(emp => <option key={emp.id} value={emp.id}>{emp.name}</option>)}
+        </select>
       </div>
 
       {/* サマリーカード */}

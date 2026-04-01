@@ -2,8 +2,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 
-const positions = ['乗務員', '管理者', '事務', '整備', 'その他']
-const emptyForm = { code: '', name: '', department: '', position: '', phone: '', is_active: true }
+const emptyForm = { code: '', last_name: '', first_name: '', name: '', department: '', is_active: true }
 
 export default function EmployeesPage() {
   const [items, setItems] = useState<any[]>([])
@@ -44,10 +43,11 @@ export default function EmployeesPage() {
   async function save(e: React.FormEvent) {
     e.preventDefault()
     setSaving(true)
+    const payload = { ...form, name: `${form.last_name} ${form.first_name}`.trim() }
     if (editing) {
-      await supabase.from('employees').update(form).eq('id', editing)
+      await supabase.from('employees').update(payload).eq('id', editing)
     } else {
-      await supabase.from('employees').insert(form)
+      await supabase.from('employees').insert(payload)
     }
     setShowModal(false)
     await load()
@@ -73,10 +73,9 @@ export default function EmployeesPage() {
           <thead className="bg-gray-50 border-b">
             <tr>
               <th className="px-4 py-3 text-left text-gray-600">社員CD</th>
-              <th className="px-4 py-3 text-left text-gray-600">氏名</th>
+              <th className="px-4 py-3 text-left text-gray-600">姓</th>
+              <th className="px-4 py-3 text-left text-gray-600">名</th>
               <th className="px-4 py-3 text-left text-gray-600">部署</th>
-              <th className="px-4 py-3 text-left text-gray-600">役職</th>
-              <th className="px-4 py-3 text-left text-gray-600">電話番号</th>
               <th className="px-4 py-3 text-left text-gray-600">状態</th>
               <th className="px-4 py-3 text-center text-gray-600">操作</th>
             </tr>
@@ -85,10 +84,9 @@ export default function EmployeesPage() {
             {items.map(item => (
               <tr key={item.id} className="border-b hover:bg-gray-50">
                 <td className="px-4 py-2">{item.code}</td>
-                <td className="px-4 py-2">{item.name}</td>
+                <td className="px-4 py-2">{item.last_name}</td>
+                <td className="px-4 py-2">{item.first_name}</td>
                 <td className="px-4 py-2">{item.department}</td>
-                <td className="px-4 py-2">{item.position}</td>
-                <td className="px-4 py-2">{item.phone}</td>
                 <td className="px-4 py-2">
                   <span className={item.is_active ? 'text-green-600' : 'text-red-500'}>{item.is_active ? '在籍' : '退職'}</span>
                 </td>
@@ -98,7 +96,7 @@ export default function EmployeesPage() {
                 </td>
               </tr>
             ))}
-            {items.length === 0 && <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-400">データがありません</td></tr>}
+            {items.length === 0 && <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400">データがありません</td></tr>}
           </tbody>
         </table>
       </div>
@@ -108,32 +106,23 @@ export default function EmployeesPage() {
           <div className="bg-white rounded-lg shadow-xl w-[500px] p-6">
             <h3 className="text-lg font-semibold mb-4">{editing ? '従業員編集' : '従業員登録'}</h3>
             <form onSubmit={save} className="space-y-3">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs text-gray-600 mb-1">社員CD</label>
-                  <input value={form.code} readOnly className="w-full border rounded px-2 py-1.5 text-sm bg-gray-100" />
-                </div>
-                <div>
-                  <label className="block text-xs text-gray-600 mb-1">氏名</label>
-                  <input value={form.name} onChange={e => upd('name', e.target.value)} required className="w-full border rounded px-2 py-1.5 text-sm" />
-                </div>
+              <div>
+                <label className="block text-xs text-gray-600 mb-1">社員CD</label>
+                <input value={form.code} readOnly className="w-full border rounded px-2 py-1.5 text-sm bg-gray-100" />
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs text-gray-600 mb-1">部署</label>
-                  <input value={form.department} onChange={e => upd('department', e.target.value)} className="w-full border rounded px-2 py-1.5 text-sm" />
+                  <label className="block text-xs text-gray-600 mb-1">姓</label>
+                  <input value={form.last_name} onChange={e => upd('last_name', e.target.value)} required className="w-full border rounded px-2 py-1.5 text-sm" />
                 </div>
                 <div>
-                  <label className="block text-xs text-gray-600 mb-1">役職</label>
-                  <select value={form.position} onChange={e => upd('position', e.target.value)} className="w-full border rounded px-2 py-1.5 text-sm">
-                    <option value="">選択してください</option>
-                    {positions.map(p => <option key={p} value={p}>{p}</option>)}
-                  </select>
+                  <label className="block text-xs text-gray-600 mb-1">名</label>
+                  <input value={form.first_name} onChange={e => upd('first_name', e.target.value)} required className="w-full border rounded px-2 py-1.5 text-sm" />
                 </div>
               </div>
               <div>
-                <label className="block text-xs text-gray-600 mb-1">電話番号</label>
-                <input value={form.phone} onChange={e => upd('phone', e.target.value)} className="w-full border rounded px-2 py-1.5 text-sm" />
+                <label className="block text-xs text-gray-600 mb-1">部署</label>
+                <input value={form.department} onChange={e => upd('department', e.target.value)} className="w-full border rounded px-2 py-1.5 text-sm" />
               </div>
               <div className="flex items-center gap-2">
                 <input checked={form.is_active} onChange={e => upd('is_active', e.target.checked)} type="checkbox" id="active" />
